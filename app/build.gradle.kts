@@ -4,13 +4,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-/*
- * Release signing is driven entirely by environment variables so that no
- * credential ever lives in the repository. CI decodes KEYSTORE_BASE64 into a
- * file and exports KEYSTORE_FILE. When any value is missing we simply do not
- * create a signing config: the release build then produces an *unsigned* APK
- * and the workflow reports it as unsigned instead of pretending otherwise.
- */
 val keystoreFilePath: String? = System.getenv("KEYSTORE_FILE")
 val keystorePassword: String? = System.getenv("KEYSTORE_PASSWORD")
 val keystoreAlias: String? = System.getenv("KEY_ALIAS")
@@ -23,14 +16,9 @@ val hasReleaseSigning: Boolean =
         !keystoreAlias.isNullOrBlank() &&
         !keystoreKeyPassword.isNullOrBlank()
 
-/*
- * R8 is enabled for release by default. It can be switched off with
- *   ./gradlew :app:assembleRelease -Pvexedit.minifyRelease=false
- * which is required on machines with <4 GB RAM (R8 is memory hungry) and is
- * useful when diagnosing shrinking issues. CI keeps the default (true).
- */
 val minifyRelease: Boolean =
-    (project.findProperty("vexedit.minifyRelease") as String?)?.toBooleanStrictOrNull() ?: true
+    (project.findProperty("vexedit.minifyRelease") as String?)
+        ?.toBooleanStrictOrNull() ?: true
 
 android {
     namespace = "com.vexedit.studio"
@@ -60,10 +48,7 @@ android {
     }
 
     buildTypes {
-        getByName("debug") {
-            isMinifyEnabled = false
-            // Debug keeps the default debug keystore so the APK is installable.
-        }
+        getByName("debug") { isMinifyEnabled = false }
         getByName("release") {
             isMinifyEnabled = minifyRelease
             proguardFiles(
@@ -78,23 +63,30 @@ android {
         }
     }
 
-    buildFeatures {
-        compose = true
+    // JVM birim testleri android.jar stub'larına dokunduğunda
+    // "Method ... not mocked" yerine güvenli davranır ve kaynakları okuyabilir.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
     }
+
+    buildFeatures { compose = true }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     packaging {
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
+        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    }
+}
+
+// Kotlin 2.0: kotlinOptions { jvmTarget } kullanımdan kaldırıldı.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        freeCompilerArgs.add("-opt-in=kotlin.RequiresOptIn")
     }
 }
 
@@ -112,8 +104,14 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
+    // Medya: oynatma için Media3 ExoPlayer (minSdk 24, aktif bakım).
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
+
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlin:kotlin-test:2.0.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+
     androidTestImplementation("androidx.test.ext:junit:1.2.0")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.0")
     androidTestImplementation(composeBom)
@@ -122,14 +120,11 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
-/** Used by CI to name artifacts/releases without fragile log parsing. */
 tasks.register("printVersionName") {
     val versionName = android.defaultConfig.versionName
     doLast { println(versionName) }
 }
 
-/** Reports whether this build is configured to produce a signed release APK. */
 tasks.register("printSigningStatus") {
-    val signed = hasReleaseSigning
-    doLast { println(if (signed) "signed" else "unsigned") }
+    doLast { println(if (hasReleaseSigning) "signed" else "unsigned") }
 }
