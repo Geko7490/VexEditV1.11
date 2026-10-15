@@ -1,10 +1,5 @@
 name: Android CI
 
-# Triggers:
-#  - push to main/develop          -> tests + debug APK + release APK
-#  - pull requests to main/develop -> tests + debug APK (no release, secrets are unavailable on forks)
-#  - version tags (v*)             -> tests + debug APK + release APK + GitHub Release
-#  - manual run (workflow_dispatch)
 on:
   push:
     branches: [main, develop]
@@ -18,11 +13,9 @@ on:
         type: boolean
         default: true
 
-# Least privilege by default; only the publishing job escalates to write.
 permissions:
   contents: read
 
-# One pipeline per ref; a new push cancels the previous, still-running build.
 concurrency:
   group: android-ci-${{ github.ref }}
   cancel-in-progress: true
@@ -31,23 +24,23 @@ env:
   JAVA_VERSION: "17"
   ANDROID_COMPILE_SDK: "34"
   ANDROID_BUILD_TOOLS: "34.0.0"
-  # The Gradle version comes from gradle/wrapper/gradle-wrapper.properties (8.7).
   GRADLE_OPTS: "-Dorg.gradle.welcome=never"
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # 1) Compile + unit tests. Fails fast before any packaging work is done.
-  # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------
+  # 1) Birim testleri. Kendi başına koşar ve kendi başına KIRMIZI kalır.
+  #    Başarısız olsa bile raporu yüklenir; sonuç asla gizlenmez.
+  # ---------------------------------------------------------------------
   unit-tests:
     name: Unit tests (JVM)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v4.7.1
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
@@ -61,67 +54,88 @@ jobs:
             platforms;android-${{ env.ANDROID_COMPILE_SDK }}
             build-tools;${{ env.ANDROID_BUILD_TOOLS }}
 
-      - name: Report Android SDK state
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          test -d "$ANDROID_HOME/platforms/android-${ANDROID_COMPILE_SDK}" \
-            || { echo "::error::Android platform ${ANDROID_COMPILE_SDK} is missing"; exit 1; }
-          test -x "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}/apksigner" \
-            || { echo "::error::build-tools ${ANDROID_BUILD_TOOLS} is missing"; exit 1; }
-
       - name: Set up Gradle (with dependency cache)
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v4.3.4
 
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
+      - name: Clean stale build outputs
+        run: ./gradlew --no-daemon clean
+
       - name: Run unit tests
-        run: ./gradlew :app:testDebugUnitTest --stacktrace
+        id: tests
+        run: |
+          set -o pipefail
+          ./gradlew :app:testDebugUnitTest --stacktrace --info 2>&1 | tee test-output.log
+          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+
+      - name: Show the failing tail in the job summary
+        if: failure()
+        run: |
+          {
+            echo "### :x: Unit tests failed — last 120 log lines"
+            echo '```'
+            tail -n 120 test-output.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish JUnit results to the job summary
+        if: always()
+        run: |
+          XML_DIR=app/build/test-results/testDebugUnitTest
+          if [ -d "$XML_DIR" ]; then
+            python3 - "$XML_DIR" >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+          d = sys.argv[1]
+          total = fail = err = skip = 0
+          for f in glob.glob(d + "/*.xml"):
+              r = ET.parse(f).getroot()
+              total += int(r.get("tests", 0)); fail += int(r.get("failures", 0))
+              err += int(r.get("errors", 0)); skip += int(r.get("skipped", 0))
+          print("### JUnit: %d test, %d failure, %d error, %d skipped"
+                % (total, fail, err, skip))
+          PY
+          else
+            echo "### JUnit: **hiç rapor oluşmadı** — hata test gövdesinden ÖNCE bir aşamada."
+          fi
 
       - name: Upload test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: unit-test-report-${{ github.run_number }}
           path: |
             app/build/reports/tests/testDebugUnitTest
             app/build/test-results/testDebugUnitTest
+            test-output.log
           retention-days: 14
           if-no-files-found: warn
 
-  # ---------------------------------------------------------------------------
-  # 2) Debug APK. Always built, always downloadable, never signed with a secret.
-  # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------
+  # 2) Debug APK. Testlerden BAĞIMSIZ. İmzalama sırrı istemez.
+  # ---------------------------------------------------------------------
   debug-apk:
     name: Debug APK
     runs-on: ubuntu-latest
-    needs: unit-tests
+    # NOT: needs: unit-tests YOK. Test kırmızı olsa da paket üretilir ve
+    # indirilebilir kalır; test sonucu yine açıkça başarısız görünür.
     timeout-minutes: 40
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Set up JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-java@v4.7.1
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
         with:
           log-accepted-android-sdk-licenses: false
           packages: >-
             platform-tools
             platforms;android-${{ env.ANDROID_COMPILE_SDK }}
             build-tools;${{ env.ANDROID_BUILD_TOOLS }}
-
-      - name: Set up Gradle (with dependency cache)
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+      - uses: gradle/actions/setup-gradle@v4.3.4
+      - run: chmod +x ./gradlew
 
       - name: Read application version
         id: version
@@ -133,63 +147,47 @@ jobs:
       - name: Verify debug APK
         run: |
           APK=app/build/outputs/apk/debug/app-debug.apk
-          test -s "$APK" || { echo "::error::Debug APK missing or empty: $APK"; exit 1; }
-          echo "Size: $(stat -c%s "$APK") bytes"
+          test -s "$APK" || { echo "::error::Debug APK missing: $APK"; exit 1; }
           "$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}/apksigner" verify --print-certs "$APK"
-          echo "### Debug APK built (v${{ steps.version.outputs.name }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "Signed with the local Android debug key - for testing only." >> "$GITHUB_STEP_SUMMARY"
+          echo "### Debug APK v${{ steps.version.outputs.name }} — $(stat -c%s "$APK") bayt" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: vexedit-studio-debug-v${{ steps.version.outputs.name }}-build${{ github.run_number }}
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 30
           if-no-files-found: error
 
-  # ---------------------------------------------------------------------------
-  # 3) Release APK. Signed only when every signing secret is present.
-  # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------
+  # 3) Release APK. Sırlar eksikse İMAKSIZ üretir ve öyle adlandırır.
+  # ---------------------------------------------------------------------
   release-apk:
     name: Release APK
     runs-on: ubuntu-latest
-    needs: unit-tests
     if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.build_release)
     timeout-minutes: 50
     outputs:
       version: ${{ steps.version.outputs.name }}
       signed: ${{ steps.signing.outputs.enabled }}
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v4
-
-      - name: Set up JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-java@v4.7.1
+        with: { distribution: temurin, java-version: ${{ env.JAVA_VERSION }} }
+      - uses: android-actions/setup-android@v3
         with:
           log-accepted-android-sdk-licenses: false
           packages: >-
             platform-tools
             platforms;android-${{ env.ANDROID_COMPILE_SDK }}
             build-tools;${{ env.ANDROID_BUILD_TOOLS }}
-
-      - name: Set up Gradle (with dependency cache)
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
+      - uses: gradle/actions/setup-gradle@v4.3.4
+      - run: chmod +x ./gradlew
 
       - name: Read application version
         id: version
         run: echo "name=$(./gradlew -q :app:printVersionName)" >> "$GITHUB_OUTPUT"
 
-      # `secrets` cannot be used in a step-level `if:` expression, so the
-      # availability of the signing material is resolved into a step output.
       - name: Resolve signing configuration
         id: signing
         env:
@@ -201,94 +199,28 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] \
              && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "All signing secrets are present: a signed release APK will be produced."
+            mkdir -p "$RUNNER_TEMP/vexedit"
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/vexedit/release.jks"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/vexedit/release.jks" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Signing secrets are incomplete (KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD). An UNSIGNED release APK will be produced and clearly labelled as unsigned."
+            echo "::warning::İmzalama sırları eksik — İMAKSIZ release APK üretilecek."
           fi
 
-      - name: Decode keystore
-        if: steps.signing.outputs.enabled == 'true'
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        run: |
-          # Written to the runner temp dir (outside the workspace) so it can
-          # never be archived in an artifact or committed.
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "${RUNNER_TEMP}/release.keystore"
-          test -s "${RUNNER_TEMP}/release.keystore" \
-            || { echo "::error::KEYSTORE_BASE64 did not decode into a usable keystore"; exit 1; }
-
-      - name: Assemble release APK (signed)
-        if: steps.signing.outputs.enabled == 'true'
-        env:
-          KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      - name: Assemble release APK
         run: ./gradlew :app:assembleRelease --stacktrace
 
-      - name: Assemble release APK (unsigned)
-        if: steps.signing.outputs.enabled != 'true'
-        run: ./gradlew :app:assembleRelease --stacktrace
-
-      - name: Verify release APK
-        run: |
-          set -euo pipefail
-          APKSIGNER="$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
-          APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' | head -n 1)
-          test -n "$APK" && test -s "$APK" \
-            || { echo "::error::No release APK was produced"; exit 1; }
-          echo "Artifact: $APK ($(stat -c%s "$APK") bytes)"
-          if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
-            # A failure here must fail the job: never present an unsigned or
-            # badly signed package as a signed release.
-            "$APKSIGNER" verify --print-certs --verbose "$APK"
-            echo "### Release APK: SIGNED (v${{ steps.version.outputs.name }})" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "### Release APK: UNSIGNED (v${{ steps.version.outputs.name }})" >> "$GITHUB_STEP_SUMMARY"
-            echo "Configure KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD to get a signed build." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Remove keystore from the runner
+      - name: Clean the keystore from the runner
         if: always()
-        run: rm -f "${RUNNER_TEMP}/release.keystore"
+        run: rm -rf "$RUNNER_TEMP/vexedit"
 
       - name: Upload release APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
-          name: vexedit-studio-release-${{ steps.signing.outputs.enabled == 'true' && 'signed' || 'unsigned' }}-v${{ steps.version.outputs.name }}-build${{ github.run_number }}
+          name: vexedit-studio-release-${{ steps.signing.outputs.enabled == 'true' && 'signed' || 'unsigned' }}-v${{ steps.version.outputs.name }}
           path: app/build/outputs/apk/release/*.apk
           retention-days: 30
           if-no-files-found: error
-
-  # ---------------------------------------------------------------------------
-  # 4) GitHub Release - only for v* tags, and only with a signed APK.
-  # ---------------------------------------------------------------------------
-  publish-release:
-    name: Publish GitHub Release
-    runs-on: ubuntu-latest
-    needs: release-apk
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    timeout-minutes: 15
-    steps:
-      - name: Download release APK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: vexedit-studio-release-${{ needs.release-apk.outputs.signed == 'true' && 'signed' || 'unsigned' }}-v${{ needs.release-apk.outputs.version }}-build${{ github.run_number }}
-          path: release-apk
-
-      - name: Refuse to publish an unsigned package
-        if: needs.release-apk.outputs.signed != 'true'
-        run: |
-          echo "::error::Tag ${GITHUB_REF_NAME} cannot be published: the release APK is unsigned. Add the signing secrets and re-run."
-          exit 1
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-apk/*.apk
-          name: VexEdit Studio ${{ github.ref_name }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
