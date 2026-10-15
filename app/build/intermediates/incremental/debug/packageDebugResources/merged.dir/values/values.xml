@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#FF151519</color>
+    <color name="vx_background">#FF111114</color>
+    <color name="vx_purple">#FF7C5CFF</color>
+    <color name="vx_surface">#FF1C1C22</color>
+    <string name="app_name">VexEdit Studio</string>
+    <style name="Theme.VexEditStudio" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/vx_background</item>
+        <item name="android:statusBarColor">@color/vx_background</item>
+        <item name="android:navigationBarColor">@color/vx_background</item>
+        <item name="android:colorAccent">@color/vx_purple</item>
+    </style>
+</resources>

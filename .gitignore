@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+# Android / Gradle
+# ---------------------------------------------------------------------------
+*.iml
+.gradle/
+.kotlin/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Build outputs - CI publishes these as artifacts, they are never committed.
+*.apk
+*.aab
+*.apks
+
+# Signing material must NEVER be committed. CI decodes KEYSTORE_BASE64 into
+# the runner temp directory instead.
+*.jks
+*.keystore
+keystore.properties
+release.keystore
+
+# The Gradle wrapper JAR is intentionally tracked: without it `./gradlew`
+# cannot bootstrap and GitHub Actions fails immediately.
+!gradle/wrapper/gradle-wrapper.jar
+
+# ---------------------------------------------------------------------------
+# Web preview (Vite)
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+*.local

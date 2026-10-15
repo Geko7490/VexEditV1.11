@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.vexedit.studio.app-mergeDebugResources-60:/values-v23/values-v23.xml",
+            "map": [
+                {
+                    "source": "/home/user/.gradle/caches/transforms-4/0a6b875b7662b813430b91fcd0444461/transformed/work-runtime-2.9.0/res/values-v23/values-v23.xml",
+                    "from": {
+                        "startLines": "2,3",
+                        "startColumns": "4,4",
+                        "startOffsets": "55,121",
+                        "endColumns": "65,62",
+                        "endOffsets": "116,179"
+                    }
+                }
+            ]
+        }
+    ]
+}

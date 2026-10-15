@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Base theme is intentionally a platform theme: the UI is rendered by
+      Jetpack Compose (MaterialTheme), so no AppCompat dependency is required.
+      ComponentActivity works with any platform theme.
+    -->
+    <style name="Theme.VexEditStudio" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/vx_background</item>
+        <item name="android:statusBarColor">@color/vx_background</item>
+        <item name="android:navigationBarColor">@color/vx_background</item>
+        <item name="android:colorAccent">@color/vx_purple</item>
+    </style>
+</resources>
